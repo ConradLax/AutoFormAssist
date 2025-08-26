@@ -1,0 +1,11 @@
+{Click}
+{Click}
+{Click}
+[text]
+{F11}
+{Enter}
+{Click}
+[text]
+{F11}
+{Enter}
+{Click}

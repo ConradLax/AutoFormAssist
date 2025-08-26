@@ -1,0 +1,14 @@
+2025-08-13 16:20:50 [INFO] : Script started.
+2025-08-13 16:20:50 [INFO] : Extracting values from config.ini
+2025-08-13 16:20:50 [INFO] : Config values read: Screenshot path: data\2025-08-13\, Filename indices: 4, Image ext: jpeg
+2025-08-13 16:20:50 [INFO] : Delay duration set to 100
+2025-08-13 16:20:50 [INFO] : Input file read successfully.
+2025-08-13 16:20:50 [INFO] : Keylogger file read successfully.
+2025-08-13 16:20:52 [INFO] : Automation started.
+2025-08-13 16:20:52 [INFO] : Processing entry 1 of 10000...
+2025-08-13 16:21:06 [INFO] : Script started.
+2025-08-13 16:21:06 [INFO] : Extracting values from config.ini
+2025-08-13 16:21:06 [INFO] : Config values read: Screenshot path: data\2025-08-13\, Filename indices: 1, Image ext: jpeg
+2025-08-13 16:21:06 [INFO] : Delay duration set to 100
+2025-08-13 16:21:06 [INFO] : Input file read successfully.
+2025-08-13 16:21:06 [INFO] : Keylogger file read successfully.

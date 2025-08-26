@@ -1,0 +1,5 @@
+{Click}
+{PrintScreen}
+{Click}
+{Click}
+{Click}
