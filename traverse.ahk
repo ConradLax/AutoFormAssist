@@ -1,0 +1,867 @@
+#Include *i lib\AHKv2Lib\ImagePut.ahk
+#include lib\AHKv2Lib\ShinsImageScanClass.ahk
+#Include lib\AHKv2Lib\Gdip_All.ahk
+#Include lib\Helpers\ScreenRegionUtility.ahk
+
+; READ config.ini
+screenshot_path := IniRead("config\config.ini", "DEFAULT", "keylogger_screenshot_path", "lib\imageSimilarityChecker\keylogger_screenshots\")
+filename_image_type := IniRead("config\config.ini", "DEFAULT", "filename_image_type", "png")
+traverse_SaveImage_MainMonitor_Only := IniRead("config\config.ini", "DEFAULT", "traverse_SaveImage_MainMonitor_Only", "Y")
+traverse_SaveImage_Delay := IniRead("config\config.ini", "DEFAULT", "traverse_SaveImage_Delay", 75)
+
+; DIMENSIONS
+; Width of the capture area
+; dimensionsX := 100
+dimensionsX := IniRead("config\config.ini", "DEFAULT", "traverse_SaveImage_X", 100)
+; Height of the capture area
+; dimensionsY := 100
+dimensionsY := IniRead("config\config.ini", "DEFAULT", "traverse_SaveImage_Y", 100)
+
+; VARIABLES
+; target save directories
+logdir := "traversals"
+inputdir := "inputs"
+
+; switch for identifying if input is a text or a navigation action
+gotText := false
+time := FormatTime(, "yyyy-MM-dd_HH-mm-ss")
+
+;variable to hold the Printscreen count
+keypress_count := 0
+
+;variable to hold the clickable UI Element count, counter for naming clickable image 
+clickable_count := 0
+
+; identifier if recording starts
+isStarted := false
+
+; provides timestamp naming convention for Key log and input CSV files 
+getLog(logdir) {
+    newlog := Format("{1}\Logs-{2}.txt", logdir, time)
+    return newlog
+}
+
+getInput(inputdir) {
+    newlog := Format("{1}\Input-{2}.csv", inputdir, time)
+    return newlog
+}
+
+; event handler for general keypresses
+; these will be recorded as [text] in general, or [arrow] for arrow keys
+keyevent(key) {
+    global logdir_with_date
+    global inputdir_with_date
+    global gotText
+
+    if(!gotText) {
+        if(StrCompare(key, "{Down}") == 0 || StrCompare(key, "{Up}") == 0 || StrCompare(key, "{Left}") == 0 || StrCompare(key, "{Right}") == 0) {
+            FileAppend "[arrow]`n", logdir_with_date
+            FileAppend "[arrow],", inputdir_with_date
+        }
+        else {
+            FileAppend "[text]`n", logdir_with_date
+            FileAppend "[text],", inputdir_with_date
+        }
+        gotText := true
+    }
+}
+
+; event handler for navigation keys (e.g., {Tab})
+keyEvent_NavKeys(key) {
+    global logdir_with_date
+    global gotText
+    global time
+    global keypress_count
+
+    FileAppend Format("{1}`n", key), logdir_with_date
+
+    gotText := false
+
+    if (key = "!{PrintScreen}") {
+
+        keypress_count++
+
+        ; Set the screenshot file name
+        screenshot_filename := "PrintScreen_" . keypress_count "." . filename_image_type
+
+        ImagePutFile("A", screenshot_path . time . "\" . screenshot_filename)
+    }
+
+}
+
+start() {
+    global isStarted
+    isStarted := true
+}
+
+getClickableImgBySnipping() {
+    global logdir_with_date, clickable_count, isStarted, logdir
+
+    if isStarted {
+        ; get coordinates
+        MouseGetPos &xpos, &ypos
+
+        MouseMove(0, 0, 0)
+        BlockInput("Mouse")
+        Sleep(traverse_SaveImage_Delay)
+
+        
+
+        ; run snipping tool to draw and save clickable UI element's image
+        isStarted := false
+        RunWait A_WinDir "\system32\SnippingTool.exe /clip"
+
+        MouseMove(xpos, ypos, 0)
+
+        ; save
+        pToken := Gdip_Startup(), snap := Gdip_CreateBitmapFromClipboard()
+        ; create directory
+        SplitPath A_WorkingDir logdir_with_date, &name, &dir, &ext, &name_no_ext
+        clickable_dir := logdir . "\" . name_no_ext
+        if not DirExist(clickable_dir) {
+            DirCreate clickable_dir
+        }
+        Gdip_SaveBitmapToFile(snap, out := clickable_dir "\clickable_element_" clickable_count++ ".png")
+        Gdip_DisposeImage(snap), Gdip_Shutdown(pToken)
+
+        ; click on the coordinates acquired
+        Send Format("{Click {1} {2}}", xpos, ypos)
+
+        BlockInput("Off")
+
+        ; write click action to traversal file
+        keyEvent_NavKeys("{Click}")
+
+        isStarted := true
+    }
+
+}
+
+getClickableImgByLMBClickedArea(forOTP := false) {
+    global clickable_count, dimensionsX, dimensionsY
+
+    scan := ShinsImageScanClass()
+    ; Get current mouse position
+    MouseGetPos(&imgx, &imgy)
+
+    ; Increment counter for unique file names
+
+    if(StrCompare(traverse_SaveImage_MainMonitor_Only, "Y") == 0) {
+        virtualX := SysGet(0) ; Get the total width of main monitor
+        virtualY := SysGet(1) ; Get the total height of main monitor
+    } else {
+        virtualX := SysGet(78) ; Get the total width of all monitors
+        virtualY := SysGet(79) ; Get the total height of all monitors
+    }
+
+    if(virtualX < imgx || virtualY < imgy) {
+        MsgBox(virtualX . "|" . virtualY)
+        MsgBox(imgx . "|" . imgy)
+        MsgBox("Please click only inside the main monitor",,"T2.5")
+        return
+    }
+
+    ; Temp name, update to Logs-withdate dir
+    DirPath := "traversals/Logs-" . time
+
+    ; Ensure the directory exists
+    if !DirExist(DirPath) {
+        DirCreate(DirPath)
+    }
+
+    fileName := DirPath . "/clickable_element_" . clickable_count . ".png"
+
+    ; Move the mouse away to bypass hover effects
+    MouseMove(0, 0, 0)
+    BlockInput("Mouse")
+    Sleep(traverse_SaveImage_Delay)
+
+    GetAreaAroundCenter(imgx, imgy, virtualX, virtualY, &dimensionsX, &dimensionsY)
+    
+    ; Save the image, use // because needs whole number
+    if(scan.SaveImage(fileName, imgx - dimensionsX // 2, imgy - dimensionsY // 2, dimensionsX, dimensionsY) != 0) {
+        Sleep(traverse_SaveImage_Delay)
+    } else {
+        MsgBox("Error in saving image with CoordX: " . imgx - dimensionsX // 2 . " CoordY: " . imgy - dimensionsY // 2 . " dimensionX: " . dimensionsX . " dimensionsY: " . dimensionsY)
+    }
+    ; Move the mouse back to the original position
+    MouseClick("L",imgx,imgy)
+    BlockInput("Off")
+    clickable_count++
+
+    if (forOTP) {
+        keyEvent_NavKeys("{Click OTP}")
+    }
+    else keyEvent_NavKeys("{Click}")
+}
+
+logdir_with_date := getLog(logdir)
+inputdir_with_date := getInput(inputdir)
+
+
+~a::keyevent("a")
+~#a::keyevent("a")
+~!a::keyevent("a")
+~^a::keyevent("a")
+~b::keyevent("b")
+~#b::keyevent("b")
+~!b::keyevent("b")
+~^b::keyevent("b")
+~c::keyevent("c")
+~#c::keyevent("c")
+~!c::keyevent("c")
+~^c::keyevent("c")
+~d::keyevent("d")
+~#d::keyevent("d")
+~!d::keyevent("d")
+~^d::keyevent("d")
+~e::keyevent("e")
+~#e::keyevent("e")
+~!e::keyevent("e")
+~^e::keyevent("e")
+~f::keyevent("f")
+~#f::keyevent("f")
+~!f::keyevent("f")
+~^f::keyevent("f")
+~g::keyevent("g")
+~#g::keyevent("g")
+~!g::keyevent("g")
+~^g::keyevent("g")
+~h::keyevent("h")
+~#h::keyevent("h")
+~!h::keyevent("h")
+~^h::keyevent("h")
+~i::keyevent("i")
+~#i::keyevent("i")
+~!i::keyevent("i")
+~^i::keyevent("i")
+~j::keyevent("j")
+~#j::keyevent("j")
+~!j::keyevent("j")
+~^j::keyevent("j")
+~k::keyevent("k")
+~#k::keyevent("k")
+~!k::keyevent("k")
+~^k::keyevent("k")
+~l::keyevent("l")
+~#l::keyevent("l")
+~!l::keyevent("l")
+~^l::keyevent("l")
+~m::keyevent("m")
+~#m::keyevent("m")
+~!m::keyevent("m")
+~^m::keyevent("m")
+~n::keyevent("n")
+~#n::keyevent("n")
+~!n::keyevent("n")
+~^n::keyevent("n")
+~o::keyevent("o")
+~#o::keyevent("o")
+~!o::keyevent("o")
+~^o::keyevent("o")
+~p::keyevent("p")
+~#p::keyevent("p")
+~!p::keyevent("p")
+~^p::keyevent("p")
+~q::keyevent("q")
+~#q::keyevent("q")
+~!q::keyevent("q")
+~^q::keyevent("q")
+~r::keyevent("r")
+~#r::keyevent("r")
+~!r::keyevent("r")
+~^r::keyevent("r")
+~s::keyevent("s")
+~#s::keyevent("s")
+~!s::keyevent("s")
+~^s::keyevent("s")
+~t::keyevent("t")
+~#t::keyevent("t")
+~!t::keyevent("t")
+~^t::keyevent("t")
+~u::keyevent("u")
+~#u::keyevent("u")
+~!u::keyevent("u")
+~^u::keyevent("u")
+~v::keyevent("v")
+~#v::keyevent("v")
+~!v::keyevent("v")
+~^v::keyevent("v")
+~w::keyevent("w")
+~#w::keyevent("w")
+~!w::keyevent("w")
+~^w::keyevent("w")
+~x::keyevent("x")
+~#x::keyevent("x")
+~!x::keyevent("x")
+~^x::keyevent("x")
+~y::keyevent("y")
+~#y::keyevent("y")
+~!y::keyevent("y")
+~^y::keyevent("y")
+~z::keyevent("z")
+~#z::keyevent("z")
+~!z::keyevent("z")
+~^z::keyevent("z")
+~+A::keyevent("A")
+~#+A::keyevent("A")
+~!+A::keyevent("A")
+~^+A::keyevent("A")
+~+B::keyevent("B")
+~#+B::keyevent("B")
+~!+B::keyevent("B")
+~^+B::keyevent("B")
+~+C::keyevent("C")
+~#+C::keyevent("C")
+~!+C::keyevent("C")
+~^+C::keyevent("C")
+~+D::keyevent("D")
+~#+D::keyevent("D")
+~!+D::keyevent("D")
+~^+D::keyevent("D")
+~+E::keyevent("E")
+~#+E::keyevent("E")
+~!+E::keyevent("E")
+~^+E::keyevent("E")
+~+G::keyevent("G")
+~#+G::keyevent("G")
+~!+G::keyevent("G")
+~^+G::keyevent("G")
+~+H::keyevent("H")
+~#+H::keyevent("H")
+~!+H::keyevent("H")
+~^+H::keyevent("H")
+~+I::keyevent("I")
+~#+I::keyevent("I")
+~!+I::keyevent("I")
+~^+I::keyevent("I")
+~+J::keyevent("J")
+~#+J::keyevent("J")
+~!+J::keyevent("J")
+~^+J::keyevent("J")
+~+K::keyevent("K")
+~#+K::keyevent("K")
+~!+K::keyevent("K")
+~^+K::keyevent("K")
+~+L::keyevent("L")
+~#+L::keyevent("L")
+~!+L::keyevent("L")
+~^+L::keyevent("L")
+~+M::keyevent("M")
+~#+M::keyevent("M")
+~!+M::keyevent("M")
+~^+M::keyevent("M")
+~+N::keyevent("N")
+~#+N::keyevent("N")
+~!+N::keyevent("N")
+~^+N::keyevent("N")
+~+O::keyevent("O")
+~#+O::keyevent("O")
+~!+O::keyevent("O")
+~^+O::keyevent("O")
+~+P::keyevent("P")
+~#+P::keyevent("P")
+~!+P::keyevent("P")
+~^+P::keyevent("P")
+~+Q::keyevent("Q")
+~#+Q::keyevent("Q")
+~!+Q::keyevent("Q")
+~^+Q::keyevent("Q")
+~+R::keyevent("R")
+~#+R::keyevent("R")
+~!+R::keyevent("R")
+~^+R::keyevent("R")
+~+S::keyevent("S")
+~#+S::keyevent("S")
+~!+S::keyevent("S")
+~^+S::keyevent("S")
+~+T::keyevent("T")
+~#+T::keyevent("T")
+~!+T::keyevent("T")
+~^+T::keyevent("T")
+~+U::keyevent("U")
+~#+U::keyevent("U")
+~!+U::keyevent("U")
+~^+U::keyevent("U")
+~+V::keyevent("V")
+~#+V::keyevent("V")
+~!+V::keyevent("V")
+~^+V::keyevent("V")
+~+W::keyevent("W")
+~#+W::keyevent("W")
+~!+W::keyevent("W")
+~^+W::keyevent("W")
+~+X::keyevent("X")
+~#+X::keyevent("X")
+~!+X::keyevent("X")
+~^+X::keyevent("X")
+~+Y::keyevent("Y")
+~#+Y::keyevent("Y")
+~!+Y::keyevent("Y")
+~^+Y::keyevent("Y")
+~+Z::keyevent("Z")
+~#+Z::keyevent("Z")
+~!+Z::keyevent("Z")
+~^+Z::keyevent("Z")
+~`::keyevent("``")
+~#`::keyevent("``")
+~!`::keyevent("``")
+~^`::keyevent("``")
+~!::keyevent("{!}")
+~#!::keyevent("{!}")
+~!!::keyevent("{!}")
+~^!::keyevent("{!}")
+~@::keyevent("@")
+~#@::keyevent("@")
+~!@::keyevent("@")
+~^@::keyevent("@")
+~#::keyevent("{#}")
+~##::keyevent("{#}")
+~!#::keyevent("{#}")
+~^#::keyevent("{#}")
+~$::keyevent("$")
+~#$::keyevent("$")
+~!$::keyevent("$")
+~^$::keyevent("$")
+~^::keyevent("{^}")
+~#^::keyevent("{^}")
+~!^::keyevent("{^}")
+~^^::keyevent("{^}")
+~&::keyevent("&")
+~#&::keyevent("&")
+~!&::keyevent("&")
+~^&::keyevent("&")
+~*::keyevent("*")
+~#*::keyevent("*")
+~!*::keyevent("*")
+~^*::keyevent("*")
+~(::keyevent("(")
+~#(::keyevent("(")
+~!(::keyevent("(")
+~^(::keyevent("(")
+~)::keyevent(")")
+~#)::keyevent(")")
+~!)::keyevent(")")
+~^)::keyevent(")")
+~-::keyevent("-")
+~#-::keyevent("-")
+~!-::keyevent("-")
+~^-::keyevent("-")
+~_::keyevent("_")
+~#_::keyevent("_")
+~!_::keyevent("_")
+~^_::keyevent("_")
+~=::keyevent("=")
+~#=::keyevent("=")
+~!=::keyevent("=")
+~^=::keyevent("=")
+~+::keyevent("{+}")
+~#+::keyevent("{+}")
+~!+::keyevent("{+}")
+~^+::keyevent("{+}")
+~[::keyevent("[")
+~#[::keyevent("[")
+~![::keyevent("[")
+~^[::keyevent("[")
+~{::keyevent("{{}")
+~#{::keyevent("{{}")
+~!{::keyevent("{{}")
+~^{::keyevent("{{}")
+~]::keyevent("]")
+~#]::keyevent("]")
+~!]::keyevent("]")
+~^]::keyevent("]")
+~}::keyevent("{}}")
+~#}::keyevent("{}}")
+~!}::keyevent("{}}")
+~^}::keyevent("{}}")
+~\::keyevent("\")
+~#\::keyevent("\")
+~!\::keyevent("\")
+~^\::keyevent("\")
+~|::keyevent("|")
+~#|::keyevent("|")
+~!|::keyevent("|")
+~^|::keyevent("|")
+~+;::keyevent(":")
+~#+;::keyevent(":")
+~!+;::keyevent(":")
+~^+;::keyevent(":")
+~;::keyevent("`;")
+~#;::keyevent("`;")
+~!;::keyevent("`;")
+~^;::keyevent("`;")
+~SC028::keyevent("'")
+~#SC028::keyevent("'")
+~!SC028::keyevent("'")
+~^SC028::keyevent("'")
+~,::keyevent(",")
+~#,::keyevent(",")
+~!,::keyevent(",")
+~^,::keyevent(",")
+~.::keyevent(".")
+~#.::keyevent(".")
+~!.::keyevent(".")
+~^.::keyevent(".")
+~<::keyevent("<")
+~#<::keyevent("<")
+~!<::keyevent("<")
+~^<::keyevent("<")
+~>::keyevent(">")
+~#>::keyevent(">")
+~!>::keyevent(">")
+~^>::keyevent(">")
+~/::keyevent("/")
+~#/::keyevent("/")
+~!/::keyevent("/")
+~^/::keyevent("/")
+~?::keyevent("?")
+~#?::keyevent("?")
+~!?::keyevent("?")
+~^?::keyevent("?")
+~1::keyevent("1")
+~#1::keyevent("1")
+~!1::keyevent("1")
+~^1::keyevent("1")
+~2::keyevent("2")
+~#2::keyevent("2")
+~!2::keyevent("2")
+~^2::keyevent("2")
+~3::keyevent("3")
+~#3::keyevent("3")
+~!3::keyevent("3")
+~^3::keyevent("3")
+~4::keyevent("4")
+~#4::keyevent("4")
+~!4::keyevent("4")
+~^4::keyevent("4")
+~5::keyevent("5")
+~#5::keyevent("5")
+~!5::keyevent("5")
+~^5::keyevent("5")
+~6::keyevent("6")
+~#6::keyevent("6")
+~!6::keyevent("6")
+~^6::keyevent("6")
+~7::keyevent("7")
+~#7::keyevent("7")
+~!7::keyevent("7")
+~^7::keyevent("7")
+~8::keyevent("8")
+~#8::keyevent("8")
+~!8::keyevent("8")
+~^8::keyevent("8")
+~9::keyevent("9")
+~#9::keyevent("9")
+~!9::keyevent("9")
+~^9::keyevent("9")
+~0::keyevent("0")
+~#0::keyevent("0")
+~!0::keyevent("0")
+~^0::keyevent("0")
+~SC00E::keyevent("{BS}")
+~#SC00E::keyevent("{BS}")
+~!SC00E::keyevent("{BS}")
+~^SC00E::keyevent("{BS}")
+~Pause::keyevent("{Pause}")
+~#Pause::keyevent("{Pause}")
+~!Pause::keyevent("{Pause}")
+~^Pause::keyevent("{Pause}")
+~ScrollLock::keyevent("{ScrollLock}")
+~#ScrollLock::keyevent("{ScrollLock}")
+~!ScrollLock::keyevent("{ScrollLock}")
+~^ScrollLock::keyevent("{ScrollLock}")
+~Delete::keyevent("{Delete}")
+~#Delete::keyevent("{Delete}")
+~!Delete::keyevent("{Delete}")
+~^Delete::keyevent("{Delete}")
+~Insert::keyevent("{Insert}")
+~#Insert::keyevent("{Insert}")
+~!Insert::keyevent("{Insert}")
+~^Insert::keyevent("{Insert}")
+~Home::keyevent("{Home}")
+~#Home::keyevent("{Home}")
+~!Home::keyevent("{Home}")
+~^Home::keyevent("{Home}")
+~End::keyevent("{End}")
+~#End::keyevent("{End}")
+~!End::keyevent("{End}")
+~^End::keyevent("{End}")
+~PgUp::keyevent("{PgUp}")
+~#PgUp::keyevent("{PgUp}")
+~!PgUp::keyevent("{PgUp}")
+~^PgUp::keyevent("{PgUp}")
+~PgDn::keyevent("{PgDn}")
+~#PgDn::keyevent("{PgDn}")
+~!PgDn::keyevent("{PgDn}")
+~^PgDn::keyevent("{PgDn}")
+~Up::keyevent("{Up}")
+~#Up::keyevent("{Up}")
+~!Up::keyevent("{Up}")
+~^Up::keyevent("{Up}")
+~Down::keyevent("{Down}")
+~#Down::keyevent("{Down}")
+~!Down::keyevent("{Down}")
+~^Down::keyevent("{Down}")
+~Left::keyevent("{Left}")
+~#Left::keyevent("{Left}")
+~!Left::keyevent("{Left}")
+~^Left::keyevent("{Left}")
+~Right::keyevent("{Right}")
+~#Right::keyevent("{Right}")
+~!Right::keyevent("{Right}")
+~^Right::keyevent("{Right}")
+~CapsLock::keyevent("{CapsLock}")
+~#CapsLock::keyevent("{CapsLock}")
+~!CapsLock::keyevent("{CapsLock}")
+~^CapsLock::keyevent("{CapsLock}")
+~NumLock::keyevent("{NumLock}")
+~#NumLock::keyevent("{NumLock}")
+~!NumLock::keyevent("{NumLock}")
+~^NumLock::keyevent("{NumLock}")
+~Numpad0::keyevent("{Numpad0}")
+~#Numpad0::keyevent("{Numpad0}")
+~!Numpad0::keyevent("{Numpad0}")
+~^Numpad0::keyevent("{Numpad0}")
+~Numpad1::keyevent("{Numpad1}")
+~#Numpad1::keyevent("{Numpad1}")
+~!Numpad1::keyevent("{Numpad1}")
+~^Numpad1::keyevent("{Numpad1}")
+~Numpad2::keyevent("{Numpad2}")
+~#Numpad2::keyevent("{Numpad2}")
+~!Numpad2::keyevent("{Numpad2}")
+~^Numpad2::keyevent("{Numpad2}")
+~Numpad3::keyevent("{Numpad3}")
+~#Numpad3::keyevent("{Numpad3}")
+~!Numpad3::keyevent("{Numpad3}")
+~^Numpad3::keyevent("{Numpad3}")
+~Numpad4::keyevent("{Numpad4}")
+~#Numpad4::keyevent("{Numpad4}")
+~!Numpad4::keyevent("{Numpad4}")
+~^Numpad4::keyevent("{Numpad4}")
+~Numpad5::keyevent("{Numpad5}")
+~#Numpad5::keyevent("{Numpad5}")
+~!Numpad5::keyevent("{Numpad5}")
+~^Numpad5::keyevent("{Numpad5}")
+~Numpad6::keyevent("{Numpad6}")
+~#Numpad6::keyevent("{Numpad6}")
+~!Numpad6::keyevent("{Numpad6}")
+~^Numpad6::keyevent("{Numpad6}")
+~Numpad7::keyevent("{Numpad7}")
+~#Numpad7::keyevent("{Numpad7}")
+~!Numpad7::keyevent("{Numpad7}")
+~^Numpad7::keyevent("{Numpad7}")
+~Numpad8::keyevent("{Numpad8}")
+~#Numpad8::keyevent("{Numpad8}")
+~!Numpad8::keyevent("{Numpad8}")
+~^Numpad8::keyevent("{Numpad8}")
+~Numpad9::keyevent("{Numpad9}")
+~#Numpad9::keyevent("{Numpad9}")
+~!Numpad9::keyevent("{Numpad9}")
+~^Numpad9::keyevent("{Numpad9}")
+~NumpadAdd::keyevent("{NumpadAdd}")
+~#NumpadAdd::keyevent("{NumpadAdd}")
+~!NumpadAdd::keyevent("{NumpadAdd}")
+~^NumpadAdd::keyevent("{NumpadAdd}")
+~NumpadClear::keyevent("{NumpadClear}")
+~#NumpadClear::keyevent("{NumpadClear}")
+~!NumpadClear::keyevent("{NumpadClear}")
+~^NumpadClear::keyevent("{NumpadClear}")
+~NumpadDel::keyevent("{NumpadDel}")
+~#NumpadDel::keyevent("{NumpadDel}")
+~!NumpadDel::keyevent("{NumpadDel}")
+~^NumpadDel::keyevent("{NumpadDel}")
+~NumpadDiv::keyevent("{NumpadDiv}")
+~#NumpadDiv::keyevent("{NumpadDiv}")
+~!NumpadDiv::keyevent("{NumpadDiv}")
+~^NumpadDiv::keyevent("{NumpadDiv}")
+~NumpadDot::keyevent("{NumpadDot}")
+~#NumpadDot::keyevent("{NumpadDot}")
+~!NumpadDot::keyevent("{NumpadDot}")
+~^NumpadDot::keyevent("{NumpadDot}")
+~NumpadDown::keyevent("{NumpadDown}")
+~#NumpadDown::keyevent("{NumpadDown}")
+~!NumpadDown::keyevent("{NumpadDown}")
+~^NumpadDown::keyevent("{NumpadDown}")
+~NumpadEnd::keyevent("{NumpadEnd}")
+~#NumpadEnd::keyevent("{NumpadEnd}")
+~!NumpadEnd::keyevent("{NumpadEnd}")
+~^NumpadEnd::keyevent("{NumpadEnd}")
+~NumpadEnter::keyevent("{NumpadEnter}")
+~#NumpadEnter::keyevent("{NumpadEnter}")
+~!NumpadEnter::keyevent("{NumpadEnter}")
+~^NumpadEnter::keyevent("{NumpadEnter}")
+~NumpadHome::keyevent("{NumpadHome}")
+~#NumpadHome::keyevent("{NumpadHome}")
+~!NumpadHome::keyevent("{NumpadHome}")
+~^NumpadHome::keyevent("{NumpadHome}")
+~NumpadIns::keyevent("{NumpadIns}")
+~#NumpadIns::keyevent("{NumpadIns}")
+~!NumpadIns::keyevent("{NumpadIns}")
+~^NumpadIns::keyevent("{NumpadIns}")
+~NumpadLeft::keyevent("{NumpadLeft}")
+~#NumpadLeft::keyevent("{NumpadLeft}")
+~!NumpadLeft::keyevent("{NumpadLeft}")
+~^NumpadLeft::keyevent("{NumpadLeft}")
+~NumpadMult::keyevent("{NumpadMult}")
+~#NumpadMult::keyevent("{NumpadMult}")
+~!NumpadMult::keyevent("{NumpadMult}")
+~^NumpadMult::keyevent("{NumpadMult}")
+~NumpadPgDn::keyevent("{NumpadPgDn}")
+~#NumpadPgDn::keyevent("{NumpadPgDn}")
+~!NumpadPgDn::keyevent("{NumpadPgDn}")
+~^NumpadPgDn::keyevent("{NumpadPgDn}")
+~NumpadPgUp::keyevent("{NumpadPgUp}")
+~#NumpadPgUp::keyevent("{NumpadPgUp}")
+~!NumpadPgUp::keyevent("{NumpadPgUp}")
+~^NumpadPgUp::keyevent("{NumpadPgUp}")
+~NumpadRight::keyevent("{NumpadRight}")
+~#NumpadRight::keyevent("{NumpadRight}")
+~!NumpadRight::keyevent("{NumpadRight}")
+~^NumpadRight::keyevent("{NumpadRight}")
+~NumpadSub::keyevent("{NumpadSub}")
+~#NumpadSub::keyevent("{NumpadSub}")
+~!NumpadSub::keyevent("{NumpadSub}")
+~^NumpadSub::keyevent("{NumpadSub}")
+~NumpadUp::keyevent("{NumpadUp}")
+~#NumpadUp::keyevent("{NumpadUp}")
+~!NumpadUp::keyevent("{NumpadUp}")
+~^NumpadUp::keyevent("{NumpadUp}")
+; ~F1::keyevent("{F1}")
+; ~#F1::keyevent("{F1}")
+; ~!F1::keyevent("{F1}")
+; ~^F1::keyevent("{F1}")
+~F2::keyevent("{F2}")
+~#F2::keyevent("{F2}")
+~!F2::keyevent("{F2}")
+~^F2::keyevent("{F2}")
+~F3::keyevent("{F3}")
+~#F3::keyevent("{F3}")
+~!F3::keyevent("{F3}")
+~^F3::keyevent("{F3}")
+; ~F4::keyevent("{F4}")
+; ~#F4::keyevent("{F4}")
+; ~!F4::keyevent("{F4}")
+; ~^F4::keyevent("{F4}")
+~F5::keyevent("{F5}")
+~#F5::keyevent("{F5}")
+~!F5::keyevent("{F5}")
+~^F5::keyevent("{F5}")
+~F6::keyevent("{F6}")
+~#F6::keyevent("{F6}")
+~!F6::keyevent("{F6}")
+~^F6::keyevent("{F6}")
+~F7::keyevent("{F7}")
+~#F7::keyevent("{F7}")
+~!F7::keyevent("{F7}")
+~^F7::keyevent("{F7}")
+~F8::keyevent("{F8}")
+~#F8::keyevent("{F8}")
+~!F8::keyevent("{F8}")
+~^F8::keyevent("{F8}")
+~F9::keyevent("{F9}")
+~#F9::keyevent("{F9}")
+~!F9::keyevent("{F9}")
+~^F9::keyevent("{F9}")
+~F10::keyevent("{F10}")
+~#F10::keyevent("{F10}")
+~!F10::keyevent("{F10}")
+~^F10::keyevent("{F10}")
+; ~F11::keyevent("{F11}")
+; ~#F11::keyevent("{F11}")
+; ~!F11::keyevent("{F11}")
+; ~^F11::keyevent("{F11}")
+; ~F12::keyevent("{F12}")
+; ~#F12::keyevent("{F12}")
+; ~!F12::keyevent("{F12}")
+; ~^F12::keyevent("{F12}")
+~F13::keyevent("{F13}")
+~#F13::keyevent("{F13}")
+~!F13::keyevent("{F13}")
+~^F13::keyevent("{F13}")
+~F14::keyevent("{F14}")
+~#F14::keyevent("{F14}")
+~!F14::keyevent("{F14}")
+~^F14::keyevent("{F14}")
+~F15::keyevent("{F15}")
+~#F15::keyevent("{F15}")
+~!F15::keyevent("{F15}")
+~^F15::keyevent("{F15}")
+~F16::keyevent("{F16}")
+~#F16::keyevent("{F16}")
+~!F16::keyevent("{F16}")
+~^F16::keyevent("{F16}")
+~F17::keyevent("{F17}")
+~#F17::keyevent("{F17}")
+~!F17::keyevent("{F17}")
+~^F17::keyevent("{F17}")
+~F18::keyevent("{F18}")
+~#F18::keyevent("{F18}")
+~!F18::keyevent("{F18}")
+~^F18::keyevent("{F18}")
+~F19::keyevent("{F19}")
+~#F19::keyevent("{F19}")
+~!F19::keyevent("{F19}")
+~^F19::keyevent("{F19}")
+~F20::keyevent("{F20}")
+~#F20::keyevent("{F20}")
+~!F20::keyevent("{F20}")
+~^F20::keyevent("{F20}")
+~F21::keyevent("{F21}")
+~#F21::keyevent("{F21}")
+~!F21::keyevent("{F21}")
+~^F21::keyevent("{F21}")
+~F22::keyevent("{F22}")
+~#F22::keyevent("{F22}")
+~!F22::keyevent("{F22}")
+~^F22::keyevent("{F22}")
+~F23::keyevent("{F23}")
+~#F23::keyevent("{F23}")
+~!F23::keyevent("{F23}")
+~^F23::keyevent("{F23}")
+~F24::keyevent("{F24}")
+~#F24::keyevent("{F24}")
+~!F24::keyevent("{F24}")
+~^F24::keyevent("{F24}")
+~AppsKey::keyevent("{AppsKey}")
+~#AppsKey::keyevent("{AppsKey}")
+~!AppsKey::keyevent("{AppsKey}")
+~^AppsKey::keyevent("{AppsKey}")
+
+~LWin::keyevent("{LWin}")
+~RWin::keyevent("{RWin}")
+~LControl::keyevent("{LControl}")
+~RControl::keyevent("{RControl}")
+~LShift::keyevent("{LShift}")
+~RShift::keyevent("{RShift}")
+~Tab::keyEvent_NavKeys("{Tab}")
+~#Tab::keyEvent_NavKeys("#{Tab}")
+~!Tab::keyEvent_NavKeys("!{Tab}")
+~^Tab::keyEvent_NavKeys("^{Tab}")
+~+Tab::keyEvent_NavKeys("+{Tab}")
+~Enter::keyEvent_NavKeys("{Enter}")
+~#Enter::keyEvent_NavKeys("#{Enter}")
+~!Enter::keyEvent_NavKeys("!{Enter}")
+~^Enter::keyEvent_NavKeys("^{Enter}")
+~Space::keyEvent_NavKeys(A_Space)
+~#Space::keyEvent_NavKeys(Format("#{1}", A_Space))
+~!Space::keyEvent_NavKeys(Format("!{1}", A_Space))
+~^Space::keyEvent_NavKeys(Format("^{1}", A_Space))
+
+~PrintScreen::keyEvent_NavKeys("{PrintScreen}")
+~#PrintScreen::keyEvent_NavKeys("{PrintScreen}")
+~!PrintScreen::keyEvent_NavKeys("!{PrintScreen}")
+~^PrintScreen::keyEvent_NavKeys("{PrintScreen}")
+
+
+
+; Saves an image to specified location
+F1:: start()
+#HotIf isStarted
+LButton:: getClickableImgByLMBClickedArea()
+^LButton:: getClickableImgByLMBClickedArea(true)
+RButton:: getClickableImgBySnipping()
+#HotIf 
+
+F11:: keyEvent_NavKeys("{F11}")
+F4:: ExitApp
